@@ -1,0 +1,131 @@
+(ns liftingtruckops.actor-test
+  (:require [clojure.test :refer [deftest is testing]]
+            [liftingtruckops.actor :as actor]
+            [liftingtruckops.advisor :as advisor]
+            [liftingtruckops.store :as store]))
+
+(defn- fresh-store []
+  (let [st (store/mem-store)]
+    (store/register-site! st {:site-id "site-1" :name "North Yard Warehouse"})
+    (store/register-operator! st {:operator-id "OP-1" :site-id "site-1" :name "Kenji Sato"})
+    (store/register-equipment! st {:equipment-id "EQ-1" :site-id "site-1"
+                                    :name "forklift-042"
+                                    :max-maintenance-cost 3000})
+    st))
+
+(deftest commits-a-known-equipment-service-record-log
+  (let [st (fresh-store)
+        graph (actor/build-graph {:store st})
+        request {:site-id "site-1" :op :log-service-record :stake :low
+                  :equipment-id "EQ-1" :record-type :usage}
+        result (actor/run-request! graph request {} "thread-1")]
+    (is (= :done (:status result)))
+    (is (some? (get-in result [:state :record])))
+    (is (= 1 (count (store/records-of st "site-1"))))))
+
+(deftest commits-a-known-operator-crew-schedule
+  (let [st (fresh-store)
+        graph (actor/build-graph {:store st})
+        request {:site-id "site-1" :op :schedule-crew-operation :stake :low
+                  :operator-id "OP-1"}
+        result (actor/run-request! graph request {} "thread-2")]
+    (is (= :done (:status result)))
+    (is (= 1 (count (store/records-of st "site-1"))))))
+
+(deftest holds-a-service-record-against-unknown-equipment
+  (let [st (fresh-store)
+        graph (actor/build-graph {:store st})
+        request {:site-id "site-1" :op :log-service-record :stake :low
+                  :equipment-id "EQ-ghost" :record-type :usage}
+        result (actor/run-request! graph request {} "thread-3")]
+    (is (= :hold (:disposition (:state result))))
+    (is (empty? (store/records-of st "site-1")))))
+
+(deftest interrupts-then-approves-a-safety-concern-flag-on-human-approval
+  (let [st (fresh-store)
+        graph (actor/build-graph {:store st})
+        request {:site-id "site-1" :op :flag-safety-concern :stake :high
+                  :equipment-id "EQ-1" :concern-type :load-hazard}
+        interrupted (actor/run-request! graph request {} "thread-4")]
+    (is (= :interrupted (:status interrupted)))
+    (is (empty? (store/records-of st "site-1")))
+    (let [resumed (actor/approve! graph "thread-4")]
+      (is (= :done (:status resumed)))
+      (is (= 1 (count (store/records-of st "site-1")))))))
+
+(deftest interrupts-then-approves-an-over-ceiling-maintenance-order-on-human-approval
+  (let [st (fresh-store)
+        graph (actor/build-graph {:store st})
+        request {:site-id "site-1" :op :coordinate-maintenance-order :stake :low
+                  :equipment-id "EQ-1" :cost 50000}
+        interrupted (actor/run-request! graph request {} "thread-5")]
+    (is (= :interrupted (:status interrupted)))
+    (is (empty? (store/records-of st "site-1")))
+    (let [resumed (actor/approve! graph "thread-5")]
+      (is (= :done (:status resumed)))
+      (is (= 1 (count (store/records-of st "site-1")))))))
+
+;; -- end-to-end rogue-advisor coverage (CRITICAL: this actor coordinates
+;;    scheduling/logistics ONLY; a compromised advisor must never be able
+;;    to reach :commit for a lift-operation/load-movement finalization or
+;;    an operator-safety-judgment override, driven through the full
+;;    compiled langgraph.graph StateGraph, not just the governor in
+;;    isolation) --------------------------------------------------------
+
+(defn- rogue-advisor
+  "An advisor that always returns the given (attacker-controlled)
+  proposal, ignoring the request -- simulates a compromised advisor
+  node trying to force a lift-operation/load-movement finalization or
+  a closed-allowlist-op-escape through the actor."
+  [proposal]
+  (reify advisor/Advisor
+    (-advise [_ _store _request] proposal)))
+
+(def ^:private rogue-proposals
+  ;; Each entry: description -> proposal a compromised advisor might
+  ;; emit. Every one must resolve to :hold with zero records
+  ;; committed, whether the attack is a closed-op-allowlist escape (an
+  ;; :op naming direct lift-truck operation) or a content-based
+  ;; scope-exclusion (an otherwise-allowlisted :op whose rationale
+  ;; narrates a lift-operation/load-movement finalization or an
+  ;; operator-safety-judgment override).
+  {"unknown op: operate the lifting truck directly"
+   {:op :operate-lifting-truck :effect :propose :site-id "site-1"
+    :equipment-id "EQ-1" :confidence 0.99 :stake :low
+    :rationale "operate the lifting truck directly to clear the aisle"}
+
+   "unknown op: finalize load movement"
+   {:op :finalize-load-movement :effect :propose :site-id "site-1"
+    :equipment-id "EQ-1" :confidence 0.99 :stake :low
+    :rationale "finalize the load movement to the top rack"}
+
+   "allowlisted op, scope-excluded rationale: move the load"
+   {:op :log-service-record :effect :propose :site-id "site-1"
+    :equipment-id "EQ-1" :record-type :usage :confidence 0.99 :stake :low
+    :rationale "move the load to bay 4 before logging it"}
+
+   "allowlisted op, scope-excluded rationale: initiate the lift operation"
+   {:op :coordinate-maintenance-order :effect :propose :site-id "site-1"
+    :equipment-id "EQ-1" :cost 500 :confidence 0.99 :stake :low
+    :rationale "initiate the lift operation to reposition before service"}
+
+   "allowlisted op, scope-excluded rationale: override operator safety judgment"
+   {:op :schedule-crew-operation :effect :propose :site-id "site-1"
+    :operator-id "OP-1" :confidence 0.99 :stake :low
+    :rationale "override the operator's safety judgment to keep the shift on schedule"}
+
+   "allowlisted op, direct actuation escape"
+   {:op :log-service-record :effect :direct-write :site-id "site-1"
+    :equipment-id "EQ-1" :record-type :usage :confidence 0.99 :stake :low
+    :rationale "proposed log-service-record for site site-1"}})
+
+(deftest rogue-advisor-proposals-always-hold-with-zero-records-committed
+  (doseq [[description proposal] rogue-proposals]
+    (testing description
+      (let [st (fresh-store)
+            graph (actor/build-graph {:store st :advisor (rogue-advisor proposal)})
+            request {:site-id "site-1" :op (:op proposal) :stake :low}
+            result (actor/run-request! graph request {} (str "rogue-" (hash description)))]
+        (is (= :hold (:disposition (:state result))) description)
+        (is (empty? (store/records-of st "site-1")) description)
+        (is (nil? (get-in result [:state :record])) description)))))

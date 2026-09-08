@@ -76,7 +76,7 @@
        registered ceiling, not a lift-operation-authority risk, so it
        escalates rather than hard-blocking).
     9. low confidence (< `confidence-floor`)."
-  (:require [clojure.string :as str]
+  (:require [kotoba.lang.text :as str]
             [liftingtruckops.store :as store]))
 
 (def confidence-floor 0.6)
@@ -113,7 +113,7 @@
 
 (defn- scope-excluded-text? [text]
   (when (string? text)
-    (let [lower (str/lower-case text)]
+    (let [lower (str/lower text)]
       (some #(str/includes? lower %) scope-excluded-phrases))))
 
 (defn- scope-excluded? [proposal]

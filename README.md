@@ -12,7 +12,7 @@ This repository designs a forkable OSS business for an independent warehouse-cre
 (ADR-2607011000 / ADR-2607121000): `:intake -> :advise -> :govern -> :decide
 -+-> :commit (:ok?) +-> :request-approval (:escalate?, human-in-the-loop
 interrupt) +-> :hold (:hard?)`. 27 tests / 76 assertions green
-(`clojure -M:test`).
+(`kbb -M:test`).
 
 **This actor coordinates SCHEDULING and LOGISTICS ONLY. It never operates
 the lifting truck and never finalizes a lift-operation or load-movement

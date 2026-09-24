@@ -1,5 +1,5 @@
 (ns liftingtruckops.actor-test
-  (:require [clojure.test :refer [deftest is testing]]
+  (:require [kotoba.test :refer [deftest is testing]]
             [liftingtruckops.actor :as actor]
             [liftingtruckops.advisor :as advisor]
             [liftingtruckops.store :as store]))

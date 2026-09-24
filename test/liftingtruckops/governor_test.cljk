@@ -1,5 +1,5 @@
 (ns liftingtruckops.governor-test
-  (:require [clojure.test :refer [deftest is testing]]
+  (:require [kotoba.test :refer [deftest is testing]]
             [liftingtruckops.store :as store]
             [liftingtruckops.advisor :as advisor]
             [liftingtruckops.governor :as governor]))

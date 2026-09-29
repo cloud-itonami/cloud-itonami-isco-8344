@@ -1,7 +1,7 @@
 (ns liftingtruckops.store
   "SSoT for the ISCO-08 8344 lifting truck operators warehouse
   coordination actor (itonami actor pattern, ADR-2607011000 /
-  ADR-2607121000 / CLAUDE.md Actors section; README's 'Robotics
+  ADR-2607121000 / AGENTS.md Actors section; README's 'Robotics
   premise' -- a warehouse-crew scheduling/logistics coordination robot
   performs service-record logging, crew-shift scheduling and
   maintenance-order coordination for lifting-truck (forklift) fleets
